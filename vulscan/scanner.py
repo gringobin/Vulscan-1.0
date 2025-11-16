@@ -1,5 +1,7 @@
 import socket
 import sys
+from .ports import COMMON_PORTS
+from .utils import extract_version
 
 def scan_ports_and_services(target, quick=False):
     open_ports = []
