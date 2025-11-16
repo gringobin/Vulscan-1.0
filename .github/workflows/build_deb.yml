@@ -1,0 +1,31 @@
+name: Build .deb package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build .deb
+        run: |
+          mkdir -p vulscan_1.0.0/DEBIAN
+          echo "Package: vulscan" > vulscan_1.0.0/DEBIAN/control
+          echo "Version: 1.0.0" >> vulscan_1.0.0/DEBIAN/control
+          echo "Architecture: all" >> vulscan_1.0.0/DEBIAN/control
+          echo "Maintainer: gringobin" >> vulscan_1.0.0/DEBIAN/control
+          echo "Description: OSINT-based vulnerability scanner" >> vulscan_1.0.0/DEBIAN/control
+
+          mkdir -p vulscan_1.0.0/usr/bin
+          cp scripts/vulscan vulscan_1.0.0/usr/bin/vulscan
+          chmod +x vulscan_1.0.0/usr/bin/vulscan
+
+          dpkg-deb --build vulscan_1.0.0
+
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: vulscan_1.0.0.deb
