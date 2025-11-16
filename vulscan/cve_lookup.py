@@ -9,7 +9,7 @@ def fetch_json(url):
         return None
 
 
-def search_cve(service, version=None, detailed=True):
+def get_cves(service, version=None, detailed=True):
     query = service if not version else f"{service} {version}"
     print(f"\n  [+] {query}\n")
 
