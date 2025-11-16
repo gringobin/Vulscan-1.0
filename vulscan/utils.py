@@ -1,7 +1,10 @@
-def extract_version_from_banner(banner):
-    if "Server:" in banner:
-        try:
-            return banner.split("Server:")[1].split("\n")[0].strip()
-        except:
-            return None
-    return None
+import re
+
+def extract_version(banner: str) -> str:
+    """
+    Extrae versión probable de un banner usando regex.
+    """
+    match = re.search(r"([A-Za-z0-9\./_-]+)\s*\(?(version )?([\d\.]+)", banner, re.IGNORECASE)
+    if match:
+        return match.group(0)
+    return "unknown"
