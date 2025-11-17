@@ -28,6 +28,8 @@ def fingerprint_banner(sock, port):
     except:
         return ""
 
+SSL_PORTS = {443, 465, 993, 995, 587, 8443, 9443}
+
 def scan_single_port(target, port):
     s = socket.socket()
     s.settimeout(0.4)
@@ -38,12 +40,16 @@ def scan_single_port(target, port):
         banner = fingerprint_banner(s, port)
         version = extract_version(banner)
 
+        ssl_info = fingerprint_ssl(target, port) if port in SSL_PORTS else None
+
         return {
             "port": port,
             "service": service,
             "version": version,
-            "banner": banner.strip()
+            "banner": banner.strip(),
+            "ssl": ssl_info
         }
+
     except:
         return None
     finally:
@@ -69,6 +75,7 @@ def scan_ports_and_services(target, quick=False, threads=100):
 
     print()
     return sorted(results, key=lambda x: x["port"])
+
 
 def fingerprint_ssl(target, port):
     try:
