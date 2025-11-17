@@ -1,0 +1,21 @@
+[project]
+name = "vulscan"
+version = "2.0.0"
+description = "Advanced Port & CVE Vulnerability Scanner"
+authors = [
+  {name = "Rodrigo Pavon", email = "rodrigopavonm2023@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "aiohttp",
+    "dnspython",
+    "rich",
+    "requests",
+    "reportlab",
+    "jsonschema"
+]
+
+[project.scripts]
+vulscan = "vulscan.main:main"
