@@ -240,3 +240,65 @@ def export_cves_to_csv(cve_list, outpath):
         return True
     except:
         return False
+
+# vulscan/cve_lookup.py
+"""
+Hybrid CVE lookup backend
+MIT License
+"""
+
+import requests
+import functools
+from typing import List, Dict
+
+
+@functools.lru_cache(maxsize=512)
+def hybrid_cve_lookup(product: str, version: str, ttl: int = 72) -> List[Dict]:
+    """
+    Look up CVEs using OSV → CIRCL → fallback
+    """
+    results = []
+
+    # 1) OSV.dev
+    try:
+        r = requests.post(
+            "https://api.osv.dev/v1/query",
+            json={"query": f"{product} {version}"},
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            for item in data.get("vulns", []):
+                results.append({
+                    "id": item.get("id"),
+                    "summary": item.get("summary", "")
+                })
+            if results:
+                return results
+    except Exception:
+        pass
+
+    # 2) CIRCL
+    try:
+        r = requests.get(
+            f"https://cve.circl.lu/api/search/{product}/{version}",
+            timeout=10
+        )
+        if r.status_code == 200:
+            for item in r.json():
+                results.append({
+                    "id": item.get("id"),
+                    "summary": item.get("summary", "")
+                })
+            if results:
+                return results
+    except Exception:
+        pass
+
+    # 3) sin resultados
+    return results
+
+
+if __name__ == "__main__":
+    print(hybrid_cve_lookup("nginx", "1.20"))
+
