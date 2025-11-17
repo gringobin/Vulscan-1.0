@@ -152,4 +152,26 @@ def main():
 if __name__ == "__main__":
     main()
 
+def build_cli():
+    import argparse
+    p = argparse.ArgumentParser(prog="vulscan")
+    p.add_argument("target", nargs="?", help="Target IP or domain")
+    p.add_argument("-q","--quick", action="store_true", help="Quick scan")
+    p.add_argument("-e","--export", help="Export file (.json/.html/.pdf)")
+    p.add_argument("--ttl", type=int, default=72, help="CVE cache TTL hours")
+    return p
+
+def main():
+    parser = build_cli()
+    args = parser.parse_args()
+    if not args.target:
+        parser.print_help()
+        return 1
+    # call existing run function (name in your code might be run_vulscan or similar)
+    run_vulscan(args.target, export=args.export, ttl=args.ttl)
+    return 0
+
+if __name__ == "__main__":
+    exit(main())
+
 # -
