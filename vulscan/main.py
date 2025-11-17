@@ -27,6 +27,14 @@ except ImportError:
 
 from .cve_lookup import hybrid_cve_lookup
 
+import sys
+args = sys.argv[1:]
+if args and args[0] not in ("init","remove","run","scan","help"):
+    # legacy style: vulscan <target> ...
+    # reconstruct argv to behave like: vulscan scan <target> ...
+    sys.argv.insert(1, 'scan')
+# proceed with argparse declaration that supports subcommands
+
 
 console = Console()
 log = logging.getLogger("vulscan")
