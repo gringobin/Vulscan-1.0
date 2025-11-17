@@ -13,13 +13,17 @@ from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from .scanner import scan_target
+# Scanner selection: improved → legacy fallback
+try:
+    from .improved_scanner import improved_sync_scan as scan_target
+except ImportError:
+    from .scanner import scan_ports_and_services as scan_target
+
 from .cve_lookup import hybrid_cve_lookup
 
 
 console = Console()
 log = logging.getLogger("vulscan")
-
 
 # ---------------------------------------------------------------------------
 # Export Helpers
