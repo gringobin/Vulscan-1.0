@@ -124,5 +124,26 @@ def run_vulscan(target: str, export: str = None, ttl: int = 72):
 
     return scan_data
 
+# ---------------------------------------------------------------------------
+# Entry point CLI
+# ---------------------------------------------------------------------------
+def main():
+    parser = build_cli()
+    args = parser.parse_args()
+
+    if args.target is None:
+        console.print("[red]No target specified.[/red]")
+        parser.print_help()
+        return
+
+    run_vulscan(
+        target=args.target,
+        export=args.export,
+        ttl=args.ttl
+    )
+
+
+if __name__ == "__main__":
+    main()
 
 # -
