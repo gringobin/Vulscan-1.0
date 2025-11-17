@@ -3,7 +3,13 @@
 Vulscan Professional CLI
 MIT License
 """
-
+# Scanner selection: improved → legacy fallback
+try:
+    # si hay un módulo mejorado disponible, úsalo y alinéalo a scan_target
+    from .improved_scanner import improved_sync_scan as scan_target
+except Exception:
+    # fallback: el scanner actual define scan_ports_and_services
+    from .scanner import scan_ports_and_services as scan_target
 import json
 import argparse
 import logging
