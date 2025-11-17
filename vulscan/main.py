@@ -1,198 +1,124 @@
+#!/usr/bin/env python3
+"""
+Vulscan Professional CLI
+MIT License
+"""
+
+import json
 import argparse
-import sys
-import os
-from .scanner import scan_ports_and_services
-from .cve_lookup import get_cves, export_cves_to_csv
-from .reporting.json_report import export_json
-from .reporting.html_report import export_html
-from .reporting.pdf_report import export_pdf
+import logging
+from pathlib import Path
 
-# ============================
-# INICIO CAMBIOS PATCH
-# ============================
+from rich.console import Console
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
-# Intentar usar el scanner async mejorado y el CVE Aggregator si existen
-USE_IMPROVED_SCANNER = False
-try:
-    from .vulscan_improvements.scanner_async import sync_scan as improved_sync_scan
-    from .vulscan_improvements.cve_aggregator import CVEAggregator
-    from .vulscan_improvements.fingerprint_ext import to_cpe_like
-    USE_IMPROVED_SCANNER = True
-except Exception:
-    improved_sync_scan = None
-    CVEAggregator = None
-    to_cpe_like = None
-
-# FIN CAMBIOS PATCH
-# ============================
-
-def print_banner():
-    print(r"""
-██╗   ██╗██╗   ██╗██╗     ███████╗ ██████╗ █████╗ ███╗   ██╗
-██║   ██║██║   ██║██║     ██╔════╝██╔════╝██╔══██╗████╗  ██║
-██║   ██║██║   ██║██║     ███████╗██║     ███████║██╔██╗ ██║
-╚██╗ ██╔╝██║   ██║██║     ╚════██║██║     ██╔══██║██║╚██╗██║
- ╚████╔╝ ╚██████╔╝███████╗███████║╚██████╗██║  ██║██║ ╚████║
-  ╚═══╝   ╚═════╝ ╚══════╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝
-
-        V U L S C A N   v2.0  -  Enhanced Reporting Edition
-    """)
+from .scanner import scan_target
+from .cve_lookup import hybrid_cve_lookup
 
 
-def print_cve_compact(cve):
-    cid = cve.get("id")
-    cvss = cve.get("cvss")
-    summary = cve.get("summary") or ""
-    print(f"   → {cid} | CVSS: {cvss} | {summary[:120]}")
+console = Console()
+log = logging.getLogger("vulscan")
 
 
-def print_cve_details(cve):
-    print("=" * 70)
-    print(f"📌 CVE:   {cve.get('id')}")
-    print(f"🌡 CVSS:  {cve.get('cvss')}")
-    print(f"📚 Fuentes: {', '.join(cve.get('sources') or [])}")
-    print(f"📝 Descripción:\n{cve.get('summary')}\n")
-    if cve.get("refs"):
-        print("🔗 Referencias:")
-        for r in cve["refs"][:10]:
-            print("   -", r)
-    print()
+# ---------------------------------------------------------------------------
+# Export Helpers
+# ---------------------------------------------------------------------------
+def export_json(results, filename: str):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+    console.print(f"[green]✓ Exported JSON to:[/green] {filename}")
 
 
-def scan_cves_for_target(results, full=False):
-    cve_results = []
+def export_html(results, filename: str):
+    from .reporting.html_export import generate_html_report
+    generate_html_report(results, filename)
+    console.print(f"[green]✓ Exported HTML report to:[/green] {filename}")
 
-    print("\n[+] Buscando vulnerabilidades en CVE...\n")
 
-    for entry in results:
-        port = entry["port"]
-        service = entry["service"]
-        version = entry.get("version")
+def export_pdf(results, filename: str):
+    from .reporting.pdf_export import generate_pdf_report
+    generate_pdf_report(results, filename)
+    console.print(f"[green]✓ Exported PDF report to:[/green] {filename}")
 
-        print(f"[+] {service} ({port}) - buscando CVEs...")
 
-        # ============================
-        # INICIO CAMBIO PATCH: usar CVEAggregator si está disponible
-        # ============================
-        if CVEAggregator:
-            aggregator = CVEAggregator()
-            cves = aggregator.query(service, version)
+# ---------------------------------------------------------------------------
+# Rendering results in console
+# ---------------------------------------------------------------------------
+def render_table(results):
+    table = Table(title="Vulscan Results", show_lines=True)
+
+    table.add_column("Port", justify="center")
+    table.add_column("Service", justify="left")
+    table.add_column("Version", justify="left")
+    table.add_column("CVEs", justify="left")
+
+    for service in results.get("services", []):
+        cves = service.get("cves", [])
+        cve_str = "\n".join([f"[red]{c['id']}[/red]" for c in cves]) if cves else "-"
+        table.add_row(
+            str(service.get("port")),
+            service.get("service", "-"),
+            service.get("version", "-"),
+            cve_str,
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Main Vulscan Execution
+# ---------------------------------------------------------------------------
+def run_vulscan(target: str, export: str = None, ttl: int = 72):
+    """
+    Runs improved sync scan if available, otherwise fallback.
+    Then performs hybrid CVE lookup.
+    """
+
+    console.print(f"[bold cyan]🚀 Starting Vulscan on:[/bold cyan] {target}\n")
+
+    # Detect improved scanner
+    try:
+        from .improved_scanner import improved_sync_scan
+        scanner = improved_sync_scan
+        log.info("Using improved sync scanner.")
+    except ImportError:
+        scanner = scan_target
+        log.info("Using legacy scanner.")
+
+    scan_data = scanner(target)
+
+    # Perform CVE lookup with OSV → CIRCL → NVD fallback and cache
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Checking CVEs...", total=None)
+        for service in scan_data.get("services", []):
+            version = service.get("version")
+            product = service.get("service")
+
+            if version:
+                service["cves"] = hybrid_cve_lookup(product, version, ttl=ttl)
+        progress.update(task, description="CVE analysis complete!")
+
+    # Render table results
+    render_table(scan_data)
+
+    # Export options
+    if export:
+        output = Path(export)
+        if output.suffix == ".json":
+            export_json(scan_data, export)
+        elif output.suffix == ".html":
+            export_html(scan_data, export)
+        elif output.suffix == ".pdf":
+            export_pdf(scan_data, export)
         else:
-            cves = get_cves(service, version, detailed=full)
-        # FIN CAMBIO PATCH
-        # ============================
+            console.print("[yellow]⚠ Unsupported export format[/yellow]")
 
-        if not cves:
-            print("   → No se encontraron resultados\n")
-            continue
-
-        print(f"   → {len(cves)} vulnerabilidades encontradas")
-
-        for c in cves[:10]:
-            if full:
-                print_cve_details(c)
-            else:
-                print_cve_compact(c)
-
-        cve_results.extend(cves)
-
-    return cve_results
+    return scan_data
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Vulscan - Port & CVE Scanner")
-    parser.add_argument("target", help="IP o dominio a escanear")
-    parser.add_argument("-q", "--quick", action="store_true",
-                        help="Escaneo rápido (solo puertos comunes)")
-    parser.add_argument("--full", action="store_true",
-                        help="Mostrar detalles completos de vulnerabilidades")
-    parser.add_argument("--export", metavar="FILE",
-                        help="Exportar resultados CVE a CSV")
-    parser.add_argument("--report", metavar="FILE",
-                        help="Generar reporte JSON / HTML / PDF")
-
-    args = parser.parse_args()
-
-    print_banner()
-    print(f"[+] Escaneando objetivo: {args.target}\n")
-
-    # ============================
-    # INICIO CAMBIO PATCH: usar scanner async mejorado
-    # ============================
-    results = None
-    if USE_IMPROVED_SCANNER:
-        print("[*] Usando motor de escaneo mejorado (async) — no requiere nmap.")
-        # Build ports spec
-        if args.quick:
-            try:
-                from .ports import COMMON_PORTS
-                ports_spec = ",".join(str(p) for p in sorted(COMMON_PORTS.keys()))
-            except Exception:
-                ports_spec = "1-1024"
-        else:
-            ports_spec = "1-65535"
-        raw_results = improved_sync_scan(args.target, ports_spec)
-        # Normalize into same dict shape used later
-        results = []
-        for r in raw_results:
-            results.append({
-                "port": r.port,
-                "service": getattr(r, "service", None) or "unknown",
-                "version": getattr(r, "version", None),
-                "banner": getattr(r, "banner", None),
-                "ssl": None
-            })
-    else:
-        results = scan_ports_and_services(args.target, quick=args.quick)
-    # FIN CAMBIO PATCH
-    # ============================
-
-    print("\n\n[+] Puertos abiertos encontrados:\n")
-    for r in results:
-        print(f"   → {r['port']}/tcp  {r['service']}  {r.get('version') or ''}")
-    print()
-
-    cve_results = scan_cves_for_target(results, full=args.full)
-
-    # CSV Export (original)
-    if args.export and cve_results:
-        print(f"\n[+] Exportando CVEs a CSV: {args.export}")
-        if export_cves_to_csv(cve_results, args.export):
-            print("[✓] Exportación CSV completada")
-        else:
-            print("[!] Error al escribir archivo CSV")
-
-    # JSON / HTML / PDF Export
-    if args.report:
-        out = args.report
-        ext = os.path.splitext(out)[1].lower()
-
-        print(f"\n[+] Generando reporte: {out}")
-
-        if ext == ".json":
-            if export_json(args.target, results, cve_results, out):
-                print("[✓] Reporte JSON guardado")
-            else:
-                print("[!] Error generando JSON")
-
-        elif ext == ".html":
-            if export_html(args.target, results, cve_results, out):
-                print("[✓] Reporte HTML guardado")
-            else:
-                print("[!] Error generando HTML")
-
-        elif ext == ".pdf":
-            ok, msg = export_pdf(args.target, results, cve_results, out)
-            if ok:
-                print("[✓] Reporte PDF guardado")
-            else:
-                print(f"[!] No se generó PDF: {msg}")
-
-        else:
-            print("[!] Formato inválido. Usa .json .html o .pdf")
-
-    print("\n[✔] Finalizado.\n")
-
-
-if __name__ == "__main__":
-    main()
+# -
