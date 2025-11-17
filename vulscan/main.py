@@ -162,12 +162,38 @@ if __name__ == "__main__":
 
 def build_cli():
     import argparse
-    p = argparse.ArgumentParser(prog="vulscan")
-    p.add_argument("target", nargs="?", help="Target IP or domain")
-    p.add_argument("-q","--quick", action="store_true", help="Quick scan")
-    p.add_argument("-e","--export", help="Export file (.json/.html/.pdf)")
-    p.add_argument("--ttl", type=int, default=72, help="CVE cache TTL hours")
-    return p
+
+    parser = argparse.ArgumentParser(
+        prog="vulscan",
+        description="Vulscan - Network Vulnerability Scanner",
+    )
+
+    parser.add_argument(
+        "target",
+        nargs="?",
+        help="Host o IP a escanear. Ej: vulscan 192.168.1.10",
+    )
+
+    parser.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Modo silencioso"
+    )
+
+    parser.add_argument(
+        "-e", "--export",
+        choices=["json", "html", "pdf"],
+        help="Exportar reporte"
+    )
+
+    parser.add_argument(
+        "--ttl",
+        type=int,
+        default=86400,
+        help="Tiempo de vida del cache CVE en segundos (default: 86400 = 24h)"
+    )
+
+    return parser
 
 def main():
     parser = build_cli()
