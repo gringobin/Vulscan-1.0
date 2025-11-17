@@ -1,7 +1,11 @@
 import argparse
 import sys
+import os
 from .scanner import scan_ports_and_services
 from .cve_lookup import get_cves, export_cves_to_csv
+from .reporting.json_report import export_json
+from .reporting.html_report import export_html
+from .reporting.pdf_report import export_pdf
 
 
 def print_banner():
@@ -13,7 +17,7 @@ def print_banner():
  ╚████╔╝ ╚██████╔╝███████╗███████║╚██████╗██║  ██║██║ ╚████║
   ╚═══╝   ╚═════╝ ╚══════╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝
 
-             V U L S C A N   v1.1  -  CVE Enhanced RODRIP DE MESA CHICA
+        V U L S C A N   v2.0  -  Enhanced Reporting Edition
     """)
 
 
@@ -57,7 +61,7 @@ def scan_cves_for_target(results, full=False):
 
         print(f"   → {len(cves)} vulnerabilidades encontradas")
 
-        for c in cves[:10]:  # limitar output en terminal
+        for c in cves[:10]:
             if full:
                 print_cve_details(c)
             else:
@@ -71,9 +75,14 @@ def scan_cves_for_target(results, full=False):
 def main():
     parser = argparse.ArgumentParser(description="Vulscan - Port & CVE Scanner")
     parser.add_argument("target", help="IP o dominio a escanear")
-    parser.add_argument("-q", "--quick", action="store_true", help="Escaneo rápido (solo puertos comunes)")
-    parser.add_argument("--full", action="store_true", help="Mostrar detalles completos de vulnerabilidades")
-    parser.add_argument("--export", metavar="FILE", help="Exportar resultados CVE a CSV")
+    parser.add_argument("-q", "--quick", action="store_true",
+                        help="Escaneo rápido (solo puertos comunes)")
+    parser.add_argument("--full", action="store_true",
+                        help="Mostrar detalles completos de vulnerabilidades")
+    parser.add_argument("--export", metavar="FILE",
+                        help="Exportar resultados CVE a CSV")
+    parser.add_argument("--report", metavar="FILE",
+                        help="Generar reporte JSON / HTML / PDF")
 
     args = parser.parse_args()
 
@@ -89,12 +98,42 @@ def main():
 
     cve_results = scan_cves_for_target(results, full=args.full)
 
+    # CSV Export (original)
     if args.export and cve_results:
         print(f"\n[+] Exportando CVEs a CSV: {args.export}")
         if export_cves_to_csv(cve_results, args.export):
-            print("[✓] Exportación completada")
+            print("[✓] Exportación CSV completada")
         else:
             print("[!] Error al escribir archivo CSV")
+
+    # New: JSON / HTML / PDF Export
+    if args.report:
+        out = args.report
+        ext = os.path.splitext(out)[1].lower()
+
+        print(f"\n[+] Generando reporte: {out}")
+
+        if ext == ".json":
+            if export_json(args.target, results, cve_results, out):
+                print("[✓] Reporte JSON guardado")
+            else:
+                print("[!] Error generando JSON")
+
+        elif ext == ".html":
+            if export_html(args.target, results, cve_results, out):
+                print("[✓] Reporte HTML guardado")
+            else:
+                print("[!] Error generando HTML")
+
+        elif ext == ".pdf":
+            ok, msg = export_pdf(args.target, results, cve_results, out)
+            if ok:
+                print("[✓] Reporte PDF guardado")
+            else:
+                print(f"[!] No se generó PDF: {msg}")
+
+        else:
+            print("[!] Formato inválido. Usa .json .html o .pdf")
 
     print("\n[✔] Finalizado.\n")
 
