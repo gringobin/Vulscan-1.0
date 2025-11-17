@@ -7,6 +7,24 @@ from .reporting.json_report import export_json
 from .reporting.html_report import export_html
 from .reporting.pdf_report import export_pdf
 
+# ============================
+# INICIO CAMBIOS PATCH
+# ============================
+
+# Intentar usar el scanner async mejorado y el CVE Aggregator si existen
+USE_IMPROVED_SCANNER = False
+try:
+    from .vulscan_improvements.scanner_async import sync_scan as improved_sync_scan
+    from .vulscan_improvements.cve_aggregator import CVEAggregator
+    from .vulscan_improvements.fingerprint_ext import to_cpe_like
+    USE_IMPROVED_SCANNER = True
+except Exception:
+    improved_sync_scan = None
+    CVEAggregator = None
+    to_cpe_like = None
+
+# FIN CAMBIOS PATCH
+# ============================
 
 def print_banner():
     print(r"""
@@ -53,7 +71,16 @@ def scan_cves_for_target(results, full=False):
 
         print(f"[+] {service} ({port}) - buscando CVEs...")
 
-        cves = get_cves(service, version, detailed=full)
+        # ============================
+        # INICIO CAMBIO PATCH: usar CVEAggregator si está disponible
+        # ============================
+        if CVEAggregator:
+            aggregator = CVEAggregator()
+            cves = aggregator.query(service, version)
+        else:
+            cves = get_cves(service, version, detailed=full)
+        # FIN CAMBIO PATCH
+        # ============================
 
         if not cves:
             print("   → No se encontraron resultados\n")
@@ -89,7 +116,36 @@ def main():
     print_banner()
     print(f"[+] Escaneando objetivo: {args.target}\n")
 
-    results = scan_ports_and_services(args.target, quick=args.quick)
+    # ============================
+    # INICIO CAMBIO PATCH: usar scanner async mejorado
+    # ============================
+    results = None
+    if USE_IMPROVED_SCANNER:
+        print("[*] Usando motor de escaneo mejorado (async) — no requiere nmap.")
+        # Build ports spec
+        if args.quick:
+            try:
+                from .ports import COMMON_PORTS
+                ports_spec = ",".join(str(p) for p in sorted(COMMON_PORTS.keys()))
+            except Exception:
+                ports_spec = "1-1024"
+        else:
+            ports_spec = "1-65535"
+        raw_results = improved_sync_scan(args.target, ports_spec)
+        # Normalize into same dict shape used later
+        results = []
+        for r in raw_results:
+            results.append({
+                "port": r.port,
+                "service": getattr(r, "service", None) or "unknown",
+                "version": getattr(r, "version", None),
+                "banner": getattr(r, "banner", None),
+                "ssl": None
+            })
+    else:
+        results = scan_ports_and_services(args.target, quick=args.quick)
+    # FIN CAMBIO PATCH
+    # ============================
 
     print("\n\n[+] Puertos abiertos encontrados:\n")
     for r in results:
@@ -106,7 +162,7 @@ def main():
         else:
             print("[!] Error al escribir archivo CSV")
 
-    # New: JSON / HTML / PDF Export
+    # JSON / HTML / PDF Export
     if args.report:
         out = args.report
         ext = os.path.splitext(out)[1].lower()
