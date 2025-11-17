@@ -302,3 +302,7 @@ def hybrid_cve_lookup(product: str, version: str, ttl: int = 72) -> List[Dict]:
 if __name__ == "__main__":
     print(hybrid_cve_lookup("nginx", "1.20"))
 
+# backward compatibility wrapper expected by main
+def hybrid_cve_lookup(product, version, ttl=72):
+    # ttl ignorado por compatibilidad; simplemente reutiliza get_cves
+    return get_cves(product, version, detailed=True)
