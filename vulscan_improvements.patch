@@ -1,0 +1,133 @@
+*** Begin Patch
+*** Add File: vulscan/vulscan_improvements/utils.py
++import re
++from typing import List
++
++def parse_ports(s: str) -> List[int]:
++    ports = set()
++    for part in s.split(','):
++        part = part.strip()
++        if not part:
++            continue
++        if '-' in part:
++            a,b = part.split('-',1)
++            ports.update(range(int(a), int(b)+1))
++        else:
++            ports.add(int(part))
++    return sorted(p for p in ports if 1 <= p <= 65535)
++
++def sanitize_version(v: str) -> str:
++    if not v:
++        return ''
++    v = v.strip()
++    v = re.sub(r'[^0-9a-zA-Z\.\-\_]', '_', v)
++    return v
++
++MAX_CONCURRENCY = 400
++
+*** End File
+*** Add File: vulscan/vulscan_improvements/fingerprint_ext.py
++import re
++from typing import Optional, Tuple
++from .utils import sanitize_version
++
++COMMON_SERVICE_ALIASES = {
++    'httpd': 'apache',
++    'apache': 'apache',
++    'nginx': 'nginx',
++    'microsoft-iis': 'iis',
++    'iis': 'iis',
++    'openssh': 'openssh',
++    'ssh': 'openssh',
++    'tomcat': 'tomcat',
++    'jetty': 'jetty',
++    'haproxy': 'haproxy',
++}
++
++def normalize_service(raw: Optional[str], banner: Optional[str]) -> Tuple[str, Optional[str]]:
++    \"\"\"Best-effort return (service, version) from raw service string and banner text.\"\"\"
++    s = (raw or '').lower().strip()
++    b = (banner or '').lower()
++    if s:
++        key = COMMON_SERVICE_ALIASES.get(s, s)
++        v = extract_version_from_banner(b) or None
++        return key, v
++    for k in ('apache', 'nginx', 'microsoft-iis', 'openssh', 'tomcat', 'jetty', 'haproxy'):
++        if k in b:
++            svc = COMMON_SERVICE_ALIASES.get(k, k)
++            v = extract_version_from_banner(b)
++            return svc, v
++    return 'unknown', None
++
++def extract_version_from_banner(banner: str) -> Optional[str]:
++    if not banner:
++        return None
++    # find common version substrings like 1.2.3 or 2.4 or 3.4.5-beta
++    m = re.search(r'([0-9]+(?:\.[0-9a-zA-Z\-\_]+)+)', banner)
++    if m:
++        return sanitize_version(m.group(1))
++    return None
++
++def to_cpe_like(service: str, version: Optional[str]) -> str:
++    svc = service.replace(' ', '_')
++    if version:
++        v = sanitize_version(version)
++        return f'cpe:/a:{svc}:{v}'
++    return f'cpe:/a:{svc}'
++
+*** End File
+*** Add File: vulscan/vulscan_improvements/cve_aggregator.py
++\"\"\"\n+Simple pluggable CVE aggregator. Uses existing cve_lookup if available, otherwise provides\n+an empty stub so the scanner can call a consistent interface.\n+\"\"\"\n+from typing import List, Dict, Optional\n+import importlib\n+\n+\n+class CVEAggregator:\n+    def __init__(self):\n+        # Try to reuse project cve_lookup if present to avoid duplication\n+        try:\n+            self.backend = importlib.import_module('vulscan.cve_lookup')\n+        except Exception:\n+            self.backend = None\n+\n+    def query(self, service: str, version: Optional[str]) -> List[Dict]:\n+        # prefer CPE-like queries if available in backend; fallback to keyword search\n+        q = service if not version else f\"{service} {version}\"\n+        try:\n+            if self.backend and hasattr(self.backend, 'search_cve_multi'):\n+                return self.backend.search_cve_multi(service, version)\n+            if self.backend and hasattr(self.backend, 'get_cves'):\n+                return self.backend.get_cves(service, version)\n+        except Exception:\n+            return []\n+        return []\n+\n*** End File
+*** Add File: vulscan/vulscan_improvements/scanner_async.py
++\"\"\"\n+Async scanner: high-concurrency TCP connect + protocol probes and banner grabbing.\n+Designed to replace external dependencies like nmap for service/version detection.\n+\"\"\"\n+import asyncio\n+import socket\n+import ssl\n+from typing import List, Optional\n+from .utils import parse_ports, MAX_CONCURRENCY\n+from .fingerprint_ext import normalize_service\n+\n+\n+class PortResult:\n+    def __init__(self, port:int, proto:str='tcp', state:str='open', banner:Optional[str]=None, service:Optional[str]=None, version:Optional[str]=None, extras:dict=None):\n+        self.port = port\n+        self.proto = proto\n+        self.state = state\n+        self.banner = banner\n+        self.service = service\n+        self.version = version\n+        self.extras = extras or {}\n+\n+\n+async def _read_some(reader: asyncio.StreamReader, timeout: float=1.0) -> bytes:\n+    try:\n+        return await asyncio.wait_for(reader.read(4096), timeout=timeout)\n+    except Exception:\n+        return b''\n+\n+\n+async def probe_host_port(host: str, port: int, timeout: float=2.0) -> Optional[PortResult]:\n+    try:\n+        reader, writer = await asyncio.open_connection(host, port)\n+    except Exception:\n+        return None\n+\n+    banner = None\n+    service = None\n+    version = None\n+\n+    try:\n+        # lightweight HTTP probe\n+        if port in (80, 8080, 8000, 8008):\n+            writer.write(b\"GET / HTTP/1.0\\r\\nHost: localhost\\r\\nUser-Agent: Vulscan\\r\\n\\r\\n\")\n+            await writer.drain()\n+            data = await _read_some(reader)\n+            if data:\n+                text = data.decode(errors='ignore')\n+                banner = text.split('\\r\\n\\r\\n',1)[0]\n+                import re\n+                m = re.search(r'Server:\\s*([^\\r\\n]+)', text, re.I)\n+                if m:\n+                    service = 'http'\n+                    version = m.group(1).strip()\n+\n+        elif port in (443, 8443):\n+            # close asyncio connection; do TLS socket to get cert\n+            try:\n+                writer.close()\n+                await writer.wait_closed()\n+            except Exception:\n+                pass\n+            try:\n+                ctx = ssl.create_default_context()\n+                with socket.create_connection((host, port), timeout=timeout) as sock:\n+                    with ctx.wrap_socket(sock, server_hostname=host) as ssock:\n+                        cert = ssock.getpeercert()\n+                        subj = cert.get('subject', ())\n+                        cn = None\n+                        for part in subj:\n+                            for kv in part:\n+                                if kv[0].lower() == 'commonname':\n+                                    cn = kv[1]\n+                        banner = f\"TLS cert CN={cn} SAN={cert.get('subjectAltName')}\"\n+                        service = 'https'\n+            except Exception:\n+                pass\n+\n+        elif port == 22:\n+            data = await _read_some(reader, timeout=1.0)\n+            if data:\n+                text = data.decode(errors='ignore').strip()\n+                banner = text\n+                import re\n+                m = re.match(r'SSH-([0-9\\.]+)-(.+)', text)\n+                if m:\n+                    service = 'ssh'\n+                    version = m.group(2)\n+\n+        else:\n+            # generic banner grab\n+            try:\n+                writer.write(b\"\\r\\n\")\n+                await writer.drain()\n+            except Exception:\n+                pass\n+            data = await _read_some(reader, timeout=0.8)\n+            if data:\n+                banner = data.decode(errors='ignore').strip()\n+\n+    except Exception:\n+        pass\n+    finally:\n+        try:\n+            writer.close()\n+            await writer.wait_closed()\n+        except Exception:\n+            pass\n+\n+    svc, ver = normalize_service(service, banner)\n+    if ver is None and version:\n+        ver = version\n+\n+    return PortResult(port=port, proto='tcp', state='open', banner=banner, service=svc, version=ver)\n+\n+\n+async def scan(target: str, ports: List[int], timeout: float=2.0) -> List[PortResult]:\n+    sem = asyncio.Semaphore(MAX_CONCURRENCY)\n+    results = []\n+\n+    async def worker(p):\n+        async with sem:\n+            try:\n+                r = await probe_host_port(target, p, timeout=timeout)\n+                if r:\n+                    results.append(r)\n+            except Exception:\n+                pass\n+\n+    tasks = [asyncio.create_task(worker(p)) for p in ports]\n+    await asyncio.gather(*tasks)\n+    return sorted(results, key=lambda x: x.port)\n+\n+\n+def sync_scan(target: str, ports_spec: str, timeout: float=2.0):\n+    ports = parse_ports(ports_spec)\n+    loop = None\n+    try:\n+        loop = asyncio.get_event_loop()\n+    except RuntimeError:\n+        loop = asyncio.new_event_loop()\n+        asyncio.set_event_loop(loop)\n+    return loop.run_until_complete(scan(target, ports, timeout=timeout))\n+\n*** End File
+*** Modify File: vulscan/main.py
+@@
+-from .scanner import scan_ports_and_services
+-from .cve_lookup import get_cves, export_cves_to_csv
++from .scanner import scan_ports_and_services
++from .cve_lookup import get_cves, export_cves_to_csv
++# Try to use improved async scanner if available
++USE_IMPROVED_SCANNER = False
++try:
++    from .vulscan_improvements.scanner_async import sync_scan as improved_sync_scan
++    from .vulscan_improvements.cve_aggregator import CVEAggregator
++    from .vulscan_improvements.fingerprint_ext import to_cpe_like
++    USE_IMPROVED_SCANNER = True
++except Exception:
++    improved_sync_scan = None
++    CVEAggregator = None
++    to_cpe_like = None
+@@
+-    print(f"[+] Escaneando objetivo: {args.target}\n")
+-
+-    results = scan_ports_and_services(args.target, quick=args.quick)
++    print(f"[+] Escaneando objetivo: {args.target}\n")
++
++    # If the improved scanner is present, use it (non-destructive). Otherwise fallback.
++    results = None
++    if USE_IMPROVED_SCANNER:
++        print("[*] Usando motor de escaneo mejorado (async) — no requiere nmap.")
++        # build ports spec
++        if args.quick:
++            # use common ports from original module if present
++            try:
++                from .ports import COMMON_PORTS
++                ports_spec = ",".join(str(p) for p in sorted(COMMON_PORTS.keys()))
++            except Exception:
++                ports_spec = "1-1024"
++        else:
++            ports_spec = "1-65535"
++        raw_results = improved_sync_scan(args.target, ports_spec)
++        # normalize into same dict shape used later
++        results = []
++        for r in raw_results:
++            results.append({
++                "port": r.port,
++                "service": getattr(r, "service", None) or "unknown",
++                "version": getattr(r, "version", None),
++                "banner": getattr(r, "banner", None),
++                "ssl": None
++            })
++    else:
++        results = scan_ports_and_services(args.target, quick=args.quick)
+*** End Patch
