@@ -141,29 +141,6 @@ def run_vulscan(target: str, export: str = None, ttl: int = 72):
 # ---------------------------------------------------------------------------
 # Entry point CLI
 # ---------------------------------------------------------------------------
-def main():
-    from vulscan.scanner import scan_target  # No tocar tu función original
-    from vulscan.cve_lookup import hybrid_cve_lookup  # Si existe en tu repo
-
-    parser = build_cli()
-    args = parser.parse_args()
-
-    if not args.target:
-        parser.print_help()
-        return
-
-    result = scan_target(args.target)
-
-    vulns = hybrid_cve_lookup(result, ttl=args.ttl)
-
-    if not args.quiet:
-        print(f"[+] Vulnerabilidades encontradas para {args.target}: {len(vulns)}")
-
-    if args.export:
-        from vulscan.report import export_report
-        export_report(args.target, vulns, format=args.export)
-        if not args.quiet:
-            print(f"[+] Reporte exportado en formato {args.export}")
 
 def build_cli():
     import argparse
